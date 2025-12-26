@@ -1,0 +1,336 @@
+// ReactContextMapper.aln
+// ALN port of ReactContextMapper.js for safe introspection of React.createContext
+// objects and hook dependency links (useContext/useSyncExternalStore). [file:1][web:1]
+
+module ReactContextMapper {
+
+    // -------------------------------------------------------------------------
+    // Core types
+    // -------------------------------------------------------------------------
+
+    struct ReactContextDescriptor {
+        id            : string
+        kind          : string
+        inspectPath   : string
+        globalName    : string
+        defaultValue  : any
+        currentValue  : any
+        currentValue2 : any
+        threadCount   : int32
+        providerType  : string
+        providerHasCtx: bool
+        consumerType  : string
+    }
+
+    struct ContextDependencyLink {
+        kind        : string
+        hookPath    : string
+        contextId   : string
+        memoizedVal : any
+        hasNext     : bool
+    }
+
+    struct ReactContextSummary {
+        contextCount        : int32
+        dependencyLinkCount : int32
+        notes               : string[]
+    }
+
+    struct ReactContextReport {
+        contexts : ReactContextDescriptor[]
+        links    : ContextDependencyLink[]
+        summary  : ReactContextSummary
+    }
+
+    // -------------------------------------------------------------------------
+    // Public entry
+    // root is a JSON-like tree produced by JS-side instrumentation,
+    // not live JS references (WeakSet semantics replicated by ID checks). [web:1]
+    // -------------------------------------------------------------------------
+
+    fn map(root : any, maxDepth : int32 = 6) -> ReactContextReport {
+        let contexts : ReactContextDescriptor[] = []
+        let links    : ContextDependencyLink[]  = []
+
+        // visitedKeys prevents infinite recursion on cyclic graphs by path. [web:1]
+        let visitedKeys : set<string> = set[]
+
+        walk(root, "root", 0, maxDepth, visitedKeys, contexts, links)
+
+        let summary = buildSummary(contexts, links)
+
+        return ReactContextReport{
+            contexts = contexts,
+            links    = links,
+            summary  = summary
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Recursive walker
+    // -------------------------------------------------------------------------
+
+    fn walk(
+        node        : any,
+        path        : string,
+        depth       : int32,
+        maxDepth    : int32,
+        visitedKeys : set<string>,
+        contexts    : ReactContextDescriptor[],
+        links       : ContextDependencyLink[]
+    ) {
+
+        if depth > maxDepth {
+            return
+        }
+
+        if isNil(node) {
+            return
+        }
+
+        let key = path
+        if contains(visitedKeys, key) {
+            return
+        }
+        insert(visitedKeys, key)
+
+        if typeof(node) != "object" {
+            return
+        }
+
+        if looksLikeReactContext(node) {
+            let d = buildContextDescriptor(node, path)
+            push(contexts, d)
+        }
+
+        if looksLikeDependencyNode(node) {
+            let l = buildDependencyLink(node, path)
+            if l.kind != "" {
+                push(links, l)
+            }
+        }
+
+        // Recurse into fields of plain record/JSON objects
+        for k, v in fields(node) {
+            let childPath = path + "." + k
+            walk(v, childPath, depth + 1, maxDepth, visitedKeys, contexts, links)
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Detection heuristics
+    // -------------------------------------------------------------------------
+
+    fn looksLikeReactContext(obj : any) -> bool {
+        if isNil(obj) || typeof(obj) != "object" {
+            return false
+        }
+
+        // Expect a $$typeof field whose string form includes "react.context". [file:1]
+        if !hasField(obj, "$$typeof") {
+            return false
+        }
+
+        let token = obj["$$typeof"]
+        let desc  = toString(token)
+        if !containsString(desc, "react.context") {
+            return false
+        }
+
+        // Internal React fields typically present on contexts. [file:1]
+        if !hasField(obj, "Provider") {
+            return false
+        }
+        if !hasField(obj, "_currentValue") {
+            return false
+        }
+        if !hasField(obj, "_defaultValue") {
+            return false
+        }
+        if !hasField(obj, "_threadCount") {
+            return false
+        }
+
+        return true
+    }
+
+    fn looksLikeDependencyNode(obj : any) -> bool {
+        if isNil(obj) || typeof(obj) != "object" {
+            return false
+        }
+
+        if hasField(obj, "context") {
+            let ctx = obj["context"]
+            if looksLikeReactContext(ctx) {
+                return true
+            }
+        }
+
+        if hasField(obj, "firstContext") {
+            let fc = obj["firstContext"]
+            if typeof(fc) == "object" && !isNil(fc) {
+                let ctx = if hasField(fc, "context") { fc["context"] } else { fc }
+                if looksLikeReactContext(ctx) {
+                    return true
+                }
+            }
+        }
+
+        return false
+    }
+
+    // -------------------------------------------------------------------------
+    // Builders
+    // -------------------------------------------------------------------------
+
+    fn buildContextDescriptor(ctx : any, path : string) -> ReactContextDescriptor {
+        let id = inferContextId(ctx, path)
+
+        let providerType  = describeProviderType(ctx["Provider"])
+        let providerHasCtx= providerHasContext(ctx["Provider"])
+        let consumerType  = describeConsumerType(ctx["Consumer"])
+
+        let threadCountVal : int32 = null
+        if hasField(ctx, "_threadCount") && typeof(ctx["_threadCount"]) == "number" {
+            threadCountVal = int32(ctx["_threadCount"])
+        }
+
+        return ReactContextDescriptor{
+            id            = id,
+            kind          = "ReactContextDescriptor",
+            inspectPath   = path,
+            globalName    = if hasField(ctx, "_globalName") then toString(ctx["_globalName"]) else null,
+            defaultValue  = safeSample(ctx["_defaultValue"]),
+            currentValue  = safeSample(ctx["_currentValue"]),
+            currentValue2 = safeSample(ctx["_currentValue2"]),
+            threadCount   = threadCountVal,
+            providerType  = providerType,
+            providerHasCtx= providerHasCtx,
+            consumerType  = consumerType
+        }
+    }
+
+    fn buildDependencyLink(node : any, path : string) -> ContextDependencyLink {
+        let contextNode : any = null
+
+        if hasField(node, "context") {
+            contextNode = node["context"]
+        } else if hasField(node, "firstContext") {
+            let fc = node["firstContext"]
+            if typeof(fc) == "object" && !isNil(fc) {
+                if hasField(fc, "context") {
+                    contextNode = fc["context"]
+                } else {
+                    contextNode = fc
+                }
+            }
+        }
+
+        if isNil(contextNode) || !looksLikeReactContext(contextNode) {
+            return ContextDependencyLink{
+                kind        = "",
+                hookPath    = "",
+                contextId   = "",
+                memoizedVal = null,
+                hasNext     = false
+            }
+        }
+
+        let contextId = inferContextId(contextNode, path + ".context")
+
+        let memoizedVal : any = null
+        if hasField(node, "memoizedValue") {
+            memoizedVal = safeSample(node["memoizedValue"])
+        }
+
+        let hasNextFlag = hasField(node, "next") && !isNil(node["next"])
+
+        return ContextDependencyLink{
+            kind        = "ContextDependencyLink",
+            hookPath    = path,
+            contextId   = contextId,
+            memoizedVal = memoizedVal,
+            hasNext     = hasNextFlag
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Helper describers
+    // -------------------------------------------------------------------------
+
+    fn inferContextId(ctx : any, path : string) -> string {
+        if hasField(ctx, "_globalName") && ctx["_globalName"] != null {
+            return "ReactContext:" + toString(ctx["_globalName"])
+        }
+        if hasField(ctx, "displayName") && ctx["displayName"] != null {
+            return "ReactContext:" + toString(ctx["displayName"])
+        }
+        return "ReactContext@" + path
+    }
+
+    fn describeProviderType(provider : any) -> string {
+        if isNil(provider) || typeof(provider) != "object" {
+            return ""
+        }
+        if hasField(provider, "$$typeof") {
+            return toString(provider["$$typeof"])
+        }
+        return "provider"
+    }
+
+    fn providerHasContext(provider : any) -> bool {
+        if isNil(provider) || typeof(provider) != "object" {
+            return false
+        }
+        return hasField(provider, "_context")
+    }
+
+    fn describeConsumerType(consumer : any) -> string {
+        if isNil(consumer) || typeof(consumer) != "object" {
+            return ""
+        }
+        if hasField(consumer, "$$typeof") {
+            return toString(consumer["$$typeof"])
+        }
+        return "consumer"
+    }
+
+    fn safeSample(value : any) -> any {
+        if isNil(value) {
+            return value
+        }
+        let t = typeof(value)
+        if t == "string" || t == "number" || t == "boolean" {
+            return value
+        }
+        if isArray(value) {
+            return { kind = "array", length = length(value) }
+        }
+        // Object-like: return a small structural summary only. [file:1]
+        let keys : string[] = []
+        for k, _ in fields(value) {
+            push(keys, k)
+            if length(keys) >= 5 {
+                break
+            }
+        }
+        return { kind = t, summary = keys }
+    }
+
+    fn buildSummary(
+        contexts : ReactContextDescriptor[],
+        links    : ContextDependencyLink[]
+    ) -> ReactContextSummary {
+
+        let notes : string[] = [
+            "ReactContextDescriptor objects normalize any React.createContext discovered in snapshots.",
+            "ContextDependencyLink edges show where hook frames depend on particular contexts."
+        ]
+
+        return ReactContextSummary{
+            contextCount        = length(contexts),
+            dependencyLinkCount = length(links),
+            notes               = notes
+        }
+    }
+}
