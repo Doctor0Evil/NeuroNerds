@@ -1,0 +1,399 @@
+// LicenseBadgeGenerator.aln
+// Sanitized, production-grade ALN port of LicenseBadgeGenerator.js
+// Purpose: Generate Shields.io-ready license badges for AU / BCI / HUD UIs, with
+// deterministic randomness and accessibility-focused palettes. [file:3]
+
+module LicenseBadgeGenerator {
+
+    // -------------------------------------------------------------------------
+    // Core types
+    // -------------------------------------------------------------------------
+
+    struct BadgeMeta {
+        label   : string
+        message : string
+        color   : string
+        style   : string
+        logo    : string
+        link    : string
+    }
+
+    struct BadgeDescriptor {
+        markdown : string
+        url      : string
+        meta     : BadgeMeta
+    }
+
+    struct RandomMeta {
+        seed    : int64
+        license : string
+        style   : string
+        color   : string
+    }
+
+    struct RandomBadgeDescriptor {
+        markdown  : string
+        url       : string
+        meta      : BadgeMeta
+        random    : RandomMeta
+        purpose   : string
+    }
+
+    // -------------------------------------------------------------------------
+    // URL helpers (sanitized, minimal encoding)
+    // -------------------------------------------------------------------------
+
+    fn stripHash(colorHex : string) -> string {
+        if startsWith(colorHex, "#") {
+            return substring(colorHex, 1, length(colorHex) - 1)
+        }
+        return colorHex
+    }
+
+    fn encodeSegment(raw : string) -> string {
+        // Minimal safe replacement; full RFC3986 encoder can be added in core lib. [file:3]
+        let s = replaceAll(raw, " ", "%20")
+        let s2 = replaceAll(s, "|", "%7C")
+        let s3 = replaceAll(s2, "/", "%2F")
+        let s4 = replaceAll(s3, "-", "%2D")
+        return s4
+    }
+
+    // -------------------------------------------------------------------------
+    // Core Shields.io factory
+    // -------------------------------------------------------------------------
+
+    fn makeBadge(
+        label   : string,
+        message : string,
+        color   : string,
+        style   : string = "for-the-badge",
+        logo    : string = "github",
+        link    : string = "LICENSE"
+    ) -> BadgeDescriptor {
+
+        let safeColor = stripHash(color)
+        let encLabel  = encodeSegment(label)
+        let encMsg    = encodeSegment(message)
+        let encStyle  = encodeSegment(style)
+        let encLogo   = encodeSegment(logo)
+
+        let base = "https://img.shields.io/badge/"
+        let url  = base
+                  + encLabel + "-"
+                  + encMsg   + "-"
+                  + encodeSegment(safeColor)
+                  + "?style=" + encStyle
+                  + "&logo="  + encLogo
+
+        let markdown = "[![" + label + "](" + url + ")](" + link + ")"
+
+        return BadgeDescriptor{
+            markdown = markdown,
+            url      = url,
+            meta     = BadgeMeta{
+                label   = label,
+                message = message,
+                color   = safeColor,
+                style   = style,
+                logo    = logo,
+                link    = link
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Primer-aligned MIT recommendations
+    // -------------------------------------------------------------------------
+
+    fn githubPrimerMIT() -> BadgeDescriptor[] {
+        let out : BadgeDescriptor[] = []
+
+        // brightgreen, high recognition
+        push(out, makeBadge("License", "MIT", "brightgreen", "for-the-badge", "github", "LICENSE"))
+
+        // Primer accent blue
+        push(out, makeBadge("License", "MIT", "#0969da", "for-the-badge", "github", "LICENSE"))
+
+        // Bright success green
+        push(out, makeBadge("License", "MIT", "#00d084", "for-the-badge", "github", "LICENSE"))
+
+        // Neutral / subtle variants
+        push(out, makeBadge("License", "MIT", "#6e7781", "flat", "github", "LICENSE"))
+        push(out, makeBadge("License", "MIT", "#24292f", "flat-square", "github", "LICENSE"))
+
+        return out
+    }
+
+    // -------------------------------------------------------------------------
+    // Night-mode variants
+    // -------------------------------------------------------------------------
+
+    struct ColorPurpose {
+        color   : string
+        purpose : string
+    }
+
+    struct NightBadge {
+        badge   : BadgeDescriptor
+        purpose : string
+        theme   : string
+    }
+
+    fn nightModeVariants(license : string = "MIT") -> NightBadge[] {
+        let label = "license"
+        let link  = "LICENSE"
+
+        let colors : ColorPurpose[] = [
+            ColorPurpose{ color = "#0d1117", purpose = "Near-GitHub dark canvas background" },
+            ColorPurpose{ color = "#1f6feb", purpose = "Bright accent blue for dark UIs" },
+            ColorPurpose{ color = "#238636", purpose = "Primer success green tuned for dark backgrounds" },
+            ColorPurpose{ color = "#6e7681", purpose = "Muted gray for subtle presence" }
+        ]
+
+        let styles : string[] = ["for-the-badge", "flat", "flat-square"]
+
+        let variants : NightBadge[] = []
+
+        for c in colors {
+            for st in styles {
+                let b = makeBadge(label, license, c.color, st, "github", link)
+                push(variants, NightBadge{
+                    badge   = b,
+                    purpose = c.purpose + " (" + st + ")",
+                    theme   = "night"
+                })
+            }
+        }
+
+        return variants
+    }
+
+    // -------------------------------------------------------------------------
+    // Accessible light-mode variants
+    // -------------------------------------------------------------------------
+
+    struct PaletteDef {
+        id      : string
+        color   : string
+        purpose : string
+    }
+
+    struct AccessibleBadge {
+        badge             : BadgeDescriptor
+        paletteId         : string
+        purpose           : string
+        accessibilityHint : string
+    }
+
+    fn accessibleVariants(license : string = "MIT") -> AccessibleBadge[] {
+        let label = "license"
+        let link  = "LICENSE"
+
+        let palettes : PaletteDef[] = [
+            PaletteDef{ id = "blue-strong",     color = "#0969da", purpose = "Primary accent blue, strong contrast on light backgrounds" },
+            PaletteDef{ id = "blue-soft",       color = "#54aeff", purpose = "Soft blue accent for gentle emphasis" },
+            PaletteDef{ id = "purple",          color = "#8250df", purpose = "Distinct purple, robust for tritanopia-ish palettes" },
+            PaletteDef{ id = "neutral-strong",  color = "#57606a", purpose = "Neutral strong gray for low-color UIs" }
+        ]
+
+        let out : AccessibleBadge[] = []
+
+        for p in palettes {
+            let b = makeBadge(label, license, p.color, "for-the-badge", "github", link)
+            push(out, AccessibleBadge{
+                badge             = b,
+                paletteId         = p.id,
+                purpose           = p.purpose,
+                accessibilityHint = "Chosen for strong contrast and non-ambiguous hue"
+            })
+        }
+
+        return out
+    }
+
+    // -------------------------------------------------------------------------
+    // Style variants
+    // -------------------------------------------------------------------------
+
+    struct StyleVariantBadge {
+        badge        : BadgeDescriptor
+        styleVariant : string
+        purpose      : string
+    }
+
+    fn styleVariants(
+        license : string = "MIT",
+        color   : string = "#0969da"
+    ) -> StyleVariantBadge[] {
+
+        let label  = "license"
+        let link   = "LICENSE"
+        let styles : string[] = ["for-the-badge", "flat", "flat-square", "plastic"]
+
+        let out : StyleVariantBadge[] = []
+
+        for st in styles {
+            let b = makeBadge(label, license, color, st, "github", link)
+            let p = "Same color with different Shields.io style: " + st
+            push(out, StyleVariantBadge{
+                badge        = b,
+                styleVariant = st,
+                purpose      = p
+            })
+        }
+
+        return out
+    }
+
+    // -------------------------------------------------------------------------
+    // Multi-license set
+    // -------------------------------------------------------------------------
+
+    struct LicenseDef {
+        id    : string
+        label : string
+    }
+
+    struct MultiLicenseBadge {
+        badge     : BadgeDescriptor
+        licenseId : string
+        purpose   : string
+    }
+
+    fn multiLicenseSet(baseColor : string = "#0969da") -> MultiLicenseBadge[] {
+        let licenses : LicenseDef[] = [
+            LicenseDef{ id = "MIT",          label = "MIT" },
+            LicenseDef{ id = "Apache-2.0",   label = "Apache--2.0" },
+            LicenseDef{ id = "GPL-3.0",      label = "GPL--3.0" },
+            LicenseDef{ id = "BSD-3-Clause", label = "BSD--3--Clause" },
+            LicenseDef{ id = "MPL-2.0",      label = "MPL--2.0" }
+        ]
+
+        let linkById : map<string,string> = {
+            "MIT"          : "LICENSE",
+            "Apache-2.0"   : "LICENSE-APACHE",
+            "GPL-3.0"      : "LICENSE-GPL",
+            "BSD-3-Clause" : "LICENSE-BSD",
+            "MPL-2.0"      : "LICENSE-MPL"
+        }
+
+        let out : MultiLicenseBadge[] = []
+
+        for lic in licenses {
+            let link = if hasKey(linkById, lic.id) { linkById[lic.id] } else { "LICENSE" }
+            let b = makeBadge("license", lic.label, baseColor, "for-the-badge", "github", link)
+            let p = "Standardized license badge for " + lic.id
+            push(out, MultiLicenseBadge{
+                badge     = b,
+                licenseId = lic.id,
+                purpose   = p
+            })
+        }
+
+        return out
+    }
+
+    // -------------------------------------------------------------------------
+    // Mulberry32 PRNG for deterministic random badge selection
+    // -------------------------------------------------------------------------
+
+    fn mulberry32(seed : uint32) -> (fn() -> float64) {
+        let a : uint32 = seed
+
+        fn next() -> float64 {
+            a = a + 0x6d2b79f5
+            let t1 : uint32 = a ^ (a >> 15)
+            let t2 : uint32 = t1 * (1 | a)
+            let t3 : uint32 = t2 ^ (t2 >> 7)
+            let t4 : uint32 = t3 + (t3 * (61 | t3))
+            let t5 : uint32 = t4 ^ (t4 >> 14)
+            return float64(t5) / 4294967296.0
+        }
+
+        return next
+    }
+
+    // -------------------------------------------------------------------------
+    // Random badge generator
+    // -------------------------------------------------------------------------
+
+    fn randomBadge(seedInput : int64 = -1) -> RandomBadgeDescriptor {
+        let seed : uint32 = if (seedInput >= 0) {
+            uint32(seedInput)
+        } else {
+            0x5a5a1234
+        }
+
+        let rng = mulberry32(seed)
+
+        let licenses : string[] = ["MIT", "Apache-2.0", "GPL-3.0", "BSD-3-Clause", "MPL-2.0"]
+        let styles   : string[] = ["for-the-badge", "flat", "flat-square", "plastic"]
+        let colors   : string[] = [
+            "#0969da",
+            "#54aeff",
+            "#238636",
+            "#8250df",
+            "#6e7781",
+            "#24292f",
+            "#f78166"
+        ]
+
+        let lic = licenses[int32(floor(rng() * float64(length(licenses))))]
+        let st  = styles[int32(floor(rng() * float64(length(styles))))]
+        let col = colors[int32(floor(rng() * float64(length(colors))))]
+
+        let b = makeBadge("license", lic, col, st, "github", "LICENSE")
+
+        return RandomBadgeDescriptor{
+            markdown = b.markdown,
+            url      = b.url,
+            meta     = b.meta,
+            random   = RandomMeta{
+                seed    = seedInput,
+                license = lic,
+                style   = st,
+                color   = col
+            },
+            purpose  = "Randomized yet curated license badge variant"
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Catalog for UI selectors
+    // -------------------------------------------------------------------------
+
+    struct Catalog {
+        primerMIT         : BadgeDescriptor[]
+        nightModeMIT      : NightBadge[]
+        accessibleMIT     : AccessibleBadge[]
+        styleMITAccent    : StyleVariantBadge[]
+        multiLicenseAccent: MultiLicenseBadge[]
+    }
+
+    fn catalog() -> Catalog {
+        return Catalog{
+            primerMIT          = githubPrimerMIT(),
+            nightModeMIT       = nightModeVariants("MIT"),
+            accessibleMIT      = accessibleVariants("MIT"),
+            styleMITAccent     = styleVariants("MIT", "#0969da"),
+            multiLicenseAccent = multiLicenseSet("#0969da")
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Neuromorphic / HUD routing hint
+    // -------------------------------------------------------------------------
+
+    struct BadgeRouteHint {
+        deviceName : string
+        uiTarget   : string
+        endpoint   : string
+    }
+
+    const DEFAULT_ROUTE : BadgeRouteHint = BadgeRouteHint{
+        deviceName = "AUP-NeuroHUD-LicenseDeck-01",
+        uiTarget   = "HUD/Overlays/Legal/LicenseBadges",
+        endpoint   = "http://localhost:7789/license-badge-catalog"
+    }
+}
