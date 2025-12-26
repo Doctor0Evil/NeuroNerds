@@ -1,0 +1,213 @@
+// SyntaxTokenMapper.aln
+// ALN port of the JS SyntaxTokenMapper, normalizing prettylights.syntax
+// into SyntaxRoleMap, DiffMarkupRoleMap, and DiagnosticRoleMap. [file:1]
+
+module SyntaxTokenMapper {
+
+    // -------------------------------------------------------------------------
+    // Core structs
+    // -------------------------------------------------------------------------
+
+    struct CssVarEntry {
+        raw      : string
+        cssVar   : string
+        fallback : string
+    }
+
+    struct SyntaxReportSummary {
+        totalRawKeys          : int32
+        syntaxRoleCount       : int32
+        diffMarkupRoleCount   : int32
+        diagnosticRoleCount   : int32
+        notes                 : string[]
+    }
+
+    struct SyntaxReport {
+        sourceKind         : string
+        syntaxRoleMap      : map<string,CssVarEntry>
+        diffMarkupRoleMap  : map<string,CssVarEntry>
+        diagnosticRoleMap  : map<string,CssVarEntry>
+        summary            : SyntaxReportSummary
+    }
+
+    // -------------------------------------------------------------------------
+    // Public entry
+    // -------------------------------------------------------------------------
+
+    fn mapSyntax(prettylightsSyntax : any) -> SyntaxReport {
+        let raw : any = if isNil(prettylightsSyntax) then {} else prettylightsSyntax
+
+        let syntaxRoles     = buildSyntaxRoleMap(raw)
+        let diffMarkupRoles = buildDiffMarkupRoleMap(raw)
+        let diagnosticRoles = buildDiagnosticRoleMap(raw)
+        let summary         = buildSummary(raw, syntaxRoles, diffMarkupRoles, diagnosticRoles)
+
+        return SyntaxReport{
+            sourceKind        = "prettylights-syntax-tokens",
+            syntaxRoleMap     = syntaxRoles,
+            diffMarkupRoleMap = diffMarkupRoles,
+            diagnosticRoleMap = diagnosticRoles,
+            summary           = summary
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Role maps
+    // -------------------------------------------------------------------------
+
+    fn buildSyntaxRoleMap(raw : any) -> map<string,CssVarEntry> {
+        let roles : map<string,CssVarEntry> = {}
+
+        let mappings : map<string,string> = {
+            "comment"                    : "comment",
+            "constant"                   : "constant",
+            "constantOtherReferenceLink" : "constant.other.reference-link",
+            "entity"                     : "entity",
+            "entityTag"                  : "entity.tag",
+            "keyword"                    : "keyword",
+            "string"                     : "string",
+            "stringRegexp"               : "string.regexp",
+            "storageModifierImport"      : "storage.modifier.import",
+            "variable"                   : "variable",
+            "markupBold"                 : "markup.bold",
+            "markupItalic"               : "markup.italic",
+            "markupList"                 : "markup.list",
+            "markupHeading"              : "markup.heading",
+            "metaDiffRange"              : "meta.diff.range"
+        }
+
+        for k, target in mappings {
+            if hasField(raw, k) {
+                let v = raw[k]
+                roles[target] = parseCssVar(v)
+            }
+        }
+
+        return roles
+    }
+
+    fn buildDiffMarkupRoleMap(raw : any) -> map<string,CssVarEntry> {
+        let roles : map<string,CssVarEntry> = {}
+
+        let mappings : map<string,string> = {
+            "markupInsertedBg"   : "markup.inserted.bg",
+            "markupInsertedText" : "markup.inserted.text",
+            "markupDeletedBg"    : "markup.deleted.bg",
+            "markupDeletedText"  : "markup.deleted.text",
+            "markupChangedBg"    : "markup.changed.bg",
+            "markupChangedText"  : "markup.changed.text",
+            "markupIgnoredBg"    : "markup.ignored.bg",
+            "markupIgnoredText"  : "markup.ignored.text",
+            "carriageReturnBg"   : "control.carriage-return.bg",
+            "carriageReturnText" : "control.carriage-return.text"
+        }
+
+        for k, target in mappings {
+            if hasField(raw, k) {
+                let v = raw[k]
+                roles[target] = parseCssVar(v)
+            }
+        }
+
+        return roles
+    }
+
+    fn buildDiagnosticRoleMap(raw : any) -> map<string,CssVarEntry> {
+        let roles : map<string,CssVarEntry> = {}
+
+        let mappings : map<string,string> = {
+            "invalidIllegalBg"          : "diagnostic.invalid-illegal.bg",
+            "invalidIllegalText"        : "diagnostic.invalid-illegal.text",
+            "sublimelinterGutterMark"   : "diagnostic.linter.gutter-mark",
+            "brackethighlighterAngle"   : "diagnostic.brackethighlighter.angle",
+            "brackethighlighterUnmatched": "diagnostic.brackethighlighter.unmatched"
+        }
+
+        for k, target in mappings {
+            if hasField(raw, k) {
+                let v = raw[k]
+                roles[target] = parseCssVar(v)
+            }
+        }
+
+        return roles
+    }
+
+    // -------------------------------------------------------------------------
+    // CSS var parsing
+    // -------------------------------------------------------------------------
+
+    fn parseCssVar(value : any) -> CssVarEntry {
+        if typeof(value) != "string" {
+            return CssVarEntry{
+                raw      = toString(value),
+                cssVar   = null,
+                fallback = null
+            }
+        }
+
+        let trimmed = trim(value)
+        if !startsWith(trimmed, "var(") {
+            return CssVarEntry{
+                raw      = trimmed,
+                cssVar   = null,
+                fallback = null
+            }
+        }
+
+        // Drop "var(" prefix and trailing ")"
+        let inner = substring(trimmed, 4, length(trimmed) - 5)
+        let parts = split(inner, ",")
+
+        let varName   : string = null
+        let fallback  : string = null
+
+        if length(parts) > 0 {
+            varName = trim(parts[0])
+        }
+        if length(parts) > 1 {
+            let rest : string = ""
+            for i in range(1, length(parts)) {
+                if i > 1 {
+                    rest = rest + ","
+                }
+                rest = rest + parts[i]
+            }
+            fallback = trim(rest)
+        }
+
+        return CssVarEntry{
+            raw      = trimmed,
+            cssVar   = varName,
+            fallback = fallback
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Summary
+    // -------------------------------------------------------------------------
+
+    fn buildSummary(
+        raw              : any,
+        syntaxRoles      : map<string,CssVarEntry>,
+        diffMarkupRoles  : map<string,CssVarEntry>,
+        diagnosticRoles  : map<string,CssVarEntry>
+    ) -> SyntaxReportSummary {
+
+        let totalKeys : int32 = if typeof(raw) == "object" then length(fields(raw)) else 0
+
+        let notes : string[] = [
+            "SyntaxRoleMap links parser token kinds (e.g., keyword, string) to theme colors.",
+            "DiffMarkupRoleMap standardizes visuals for inserted/changed/deleted regions.",
+            "DiagnosticRoleMap centralizes illegal-token, bracket, and linter marker colors."
+        ]
+
+        return SyntaxReportSummary{
+            totalRawKeys        = totalKeys,
+            syntaxRoleCount     = length(syntaxRoles),
+            diffMarkupRoleCount = length(diffMarkupRoles),
+            diagnosticRoleCount = length(diagnosticRoles),
+            notes               = notes
+        }
+    }
+}
