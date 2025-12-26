@@ -1,0 +1,270 @@
+// AnimationEasingMapper.aln
+// Sanitized ALN port of the JS AnimationEasingMapper, generating virtual easing objects
+// and JS-style interpolators for cubic-bezier timing functions. [page:1][web:1]
+
+module AnimationEasingMapper {
+
+    // -------------------------------------------------------------------------
+    // Core types
+    // -------------------------------------------------------------------------
+
+    struct EasingVirtualObject {
+        id              : string
+        name            : string
+        bezier          : string
+        etype           : string
+        cssVar          : string
+        velocityProfile : string
+        category        : string
+    }
+
+    struct EasingWithInterpolator {
+        easing    : EasingVirtualObject
+        // Samples of the interpolator at fixed t samples for engine ingestion.
+        samplesT  : float64[]
+        samplesY  : float64[]
+    }
+
+    // -------------------------------------------------------------------------
+    // Standard presets (matches common easing curves). [page:1]
+    // -------------------------------------------------------------------------
+
+    const standardPresets : map<string,string> = {
+        "easeOutCubic"   : "cubic-bezier(0.33, 1, 0.68, 1)",
+        "easeInCubic"    : "cubic-bezier(0.55, 0.055, 0.675, 0.19)",
+        "easeInOutCubic" : "cubic-bezier(0.645, 0.045, 0.355, 1)",
+        "easeOutQuart"   : "cubic-bezier(0.23, 1, 0.32, 1)"
+    }
+
+    // -------------------------------------------------------------------------
+    // Public mapper
+    // -------------------------------------------------------------------------
+
+    fn mapAnimations(animationObj : map<string,string>) -> EasingVirtualObject[] {
+        let easings : EasingVirtualObject[] = []
+
+        if isNil(animationObj) {
+            return easings
+        }
+
+        for name, bezierStr in animationObj {
+            if length(bezierStr) == 0 {
+                continue
+            }
+
+            let v = validateBezier(bezierStr)
+            if v.valid == false {
+                continue
+            }
+
+            let etype  = inferEasingType(bezierStr)
+            let vo = EasingVirtualObject{
+                id              = "EasingPreset:" + name,
+                name            = name,
+                bezier          = bezierStr,
+                etype           = etype,
+                cssVar          = "--animation-" + name,
+                velocityProfile = v.profile,
+                category        = "timing-function"
+            }
+            push(easings, vo)
+        }
+
+        return easings
+    }
+
+    // Convenience for engines that want baked samples instead of a JS callback.
+    fn mapAnimationsWithSamples(
+        animationObj : map<string,string>,
+        sampleCount  : int32 = 33
+    ) -> EasingWithInterpolator[] {
+
+        let out : EasingWithInterpolator[] = []
+        let easings = mapAnimations(animationObj)
+
+        for e in easings {
+            let coords = parseBezier(e.bezier)
+            if coords.valid == false {
+                continue
+            }
+            let samplesT : float64[] = []
+            let samplesY : float64[] = []
+            for i in range(0, sampleCount) {
+                let t = float64(i) / float64(sampleCount - 1)
+                let y = solveCubicBezierY(t, coords.x1, coords.y1, coords.x2, coords.y2)
+                push(samplesT, t)
+                push(samplesY, y)
+            }
+            push(out, EasingWithInterpolator{
+                easing   = e,
+                samplesT = samplesT,
+                samplesY = samplesY
+            })
+        }
+
+        return out
+    }
+
+    // -------------------------------------------------------------------------
+    // Validation & parsing
+    // -------------------------------------------------------------------------
+
+    struct BezierValidation {
+        valid   : bool
+        x1      : float64
+        y1      : float64
+        x2      : float64
+        y2      : float64
+        profile : string
+    }
+
+    struct BezierCoords {
+        valid : bool
+        x1    : float64
+        y1    : float64
+        x2    : float64
+        y2    : float64
+    }
+
+    fn validateBezier(bezierStr : string) -> BezierValidation {
+        let c = parseBezier(bezierStr)
+        if c.valid == false {
+            return BezierValidation{ valid = false, x1 = 0, y1 = 0, x2 = 0, y2 = 0, profile = "" }
+        }
+
+        // Time coordinates must be in [0,1] per CSS spec. [web:2]
+        if c.x1 < 0 || c.x1 > 1 || c.x2 < 0 || c.x2 > 1 {
+            return BezierValidation{ valid = false, x1 = 0, y1 = 0, x2 = 0, y2 = 0, profile = "" }
+        }
+
+        let profile = analyzeCurve(c.x1, c.y1, c.x2, c.y2)
+        return BezierValidation{
+            valid   = true,
+            x1      = c.x1,
+            y1      = c.y1,
+            x2      = c.x2,
+            y2      = c.y2,
+            profile = profile
+        }
+    }
+
+    fn parseBezier(bezierStr : string) -> BezierCoords {
+        // Expect: cubic-bezier(x1, y1, x2, y2)
+        let openIdx  = indexOf(bezierStr, "(")
+        let closeIdx = lastIndexOf(bezierStr, ")")
+        if openIdx < 0 || closeIdx <= openIdx {
+            return BezierCoords{ valid = false, x1 = 0, y1 = 0, x2 = 0, y2 = 0 }
+        }
+
+        let inner = substring(bezierStr, openIdx + 1, closeIdx - openIdx - 1)
+        let parts = split(inner, ",")
+        if length(parts) != 4 {
+            return BezierCoords{ valid = false, x1 = 0, y1 = 0, x2 = 0, y2 = 0 }
+        }
+
+        let x1 = parseFloat(trim(parts[0]))
+        let y1 = parseFloat(trim(parts[1]))
+        let x2 = parseFloat(trim(parts[2]))
+        let y2 = parseFloat(trim(parts[3]))
+
+        return BezierCoords{ valid = true, x1 = x1, y1 = y1, x2 = x2, y2 = y2 }
+    }
+
+    // -------------------------------------------------------------------------
+    // Easing classification (ease-out / etc.). [page:1][web:1]
+    // -------------------------------------------------------------------------
+
+    fn inferEasingType(bezierStr : string) -> string {
+        let c = parseBezier(bezierStr)
+        if c.valid == false {
+            return "custom"
+        }
+
+        // Tight match for your canonical easeOutCubic(0.33,1,0.68,1).
+        if abs(c.x1 - 0.33) < 0.05 && abs(c.x2 - 0.68) < 0.05 && abs(c.y1 - 1.0) < 0.05 && abs(c.y2 - 1.0) < 0.05 {
+            return "easeOutCubic"
+        }
+
+        if c.y1 < 0.2 && c.y2 > 0.8 {
+            return "ease-out"
+        }
+        if c.y1 > 0.8 && c.y2 < 0.2 {
+            return "ease-in"
+        }
+        return "ease-in-out"
+    }
+
+    // -------------------------------------------------------------------------
+    // Curve analysis -> velocity profile (heuristic). [page:1]
+    // -------------------------------------------------------------------------
+
+    fn analyzeCurve(x1 : float64, y1 : float64, x2 : float64, y2 : float64) -> string {
+        // Very simple derivative heuristics at start/end. Not physically exact, but
+        // enough to tag decelerating vs accelerating. [page:1]
+        let startSlope = 3.0 * x1 * (1.0 - x1) * (y2 - y1)
+        let endSlope   = 3.0 * x2 * x2 * (y1 - y2)
+
+        if startSlope > 1.0 && endSlope < 1.0 {
+            return "decelerates"
+        }
+        if startSlope < 1.0 && endSlope > 1.0 {
+            return "accelerates"
+        }
+        return "balanced"
+    }
+
+    // -------------------------------------------------------------------------
+    // Numeric solver for Y(t) on cubic-bezier
+    // -------------------------------------------------------------------------
+
+    // Given t in [0,1], return Y(t) for a cubic-bezier(x1,y1,x2,y2),
+    // solving X(s)=t using Newton iterations, then plugging into Y(s). [web:2]
+    fn solveCubicBezierY(
+        t  : float64,
+        x1 : float64,
+        y1 : float64,
+        x2 : float64,
+        y2 : float64
+    ) -> float64 {
+
+        let s : float64 = t
+        for i in range(0, 5) {
+            let x  = cubicBezierComponent(s, x1, x2)
+            let dx = cubicBezierDerivative(s, x1, x2)
+            if abs(dx) < 1e-6 {
+                break
+            }
+            s = s - (x - t) / dx
+            if s < 0.0 { s = 0.0 }
+            if s > 1.0 { s = 1.0 }
+        }
+
+        return cubicBezierValue(s, y1, y2)
+    }
+
+    // Cubic Bézier X or Y component with P0=0, P3=1. [web:2]
+    fn cubicBezierComponent(s : float64, c1 : float64, c2 : float64) -> float64 {
+        let inv = 1.0 - s
+        return 3.0 * inv * inv * s * c1 +
+               3.0 * inv * s * s * c2 +
+               s * s * s
+    }
+
+    fn cubicBezierDerivative(s : float64, c1 : float64, c2 : float64) -> float64 {
+        let inv = 1.0 - s
+        return 3.0 * inv * inv * c1 +
+               6.0 * inv * s * (c2 - c1) +
+               3.0 * s * s * (1.0 - c2)
+    }
+
+    fn cubicBezierValue(s : float64, c1 : float64, c2 : float64) -> float64 {
+        return cubicBezierComponent(s, c1, c2)
+    }
+
+    // -------------------------------------------------------------------------
+    // Suggested integration route (documentation-only):
+    // - Feed animation.easeOutCubic into mapAnimationsWithSamples
+    // - Bind cssVar to theme DOM sheets
+    // - Pair with light_tritanopia color tokens for full theme+motion objects. [page:1][web:1]
+    // -------------------------------------------------------------------------
+}
