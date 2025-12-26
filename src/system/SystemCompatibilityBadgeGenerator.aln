@@ -1,0 +1,607 @@
+// SystemCompatibilityBadgeGenerator.aln
+// Sanitized, production-grade ALN port of SystemCompatibilityBadgeGenerator.js
+// Target: Neuromorphic-compatible badge synthesis service for AU / BCI dashboards
+// Engine targets: Unreal/Unity/Godot HTTP-overlay in-cluster visual telemetry
+
+module SystemCompatibilityBadgeGenerator {
+
+    // -------------------------------------------------------------------------
+    // Core data-structures
+    // -------------------------------------------------------------------------
+
+    struct OsInfo {
+        id        : string
+        label     : string
+        colorHex  : string
+        logoSlug  : string
+        aliases   : string[]
+    }
+
+    struct ArchInfo {
+        id        : string
+        label     : string
+        colorHex  : string
+        logoSlug  : string
+        aliases   : string[]
+    }
+
+    struct RuntimeInfo {
+        id        : string
+        label     : string
+        colorHex  : string
+        logoSlug  : string
+        ranges    : string[]
+    }
+
+    struct ToolInfo {
+        id        : string
+        label     : string
+        colorHex  : string
+        logoSlug  : string
+    }
+
+    struct BadgeMeta {
+        label   : string
+        message : string
+        color   : string
+        style   : string
+        logo    : string
+        link    : string
+    }
+
+    struct BadgeDescriptor {
+        markdown : string
+        url      : string
+        meta     : BadgeMeta
+    }
+
+    struct OsBadgeSet {
+        summary : BadgeDescriptor
+        perOs   : BadgeDescriptor[]
+    }
+
+    struct ArchBadgeSet {
+        summary : BadgeDescriptor
+        perArch : BadgeDescriptor[]
+    }
+
+    struct RuntimeBadgeSet {
+        summary    : BadgeDescriptor
+        perRuntime : BadgeDescriptor[]
+    }
+
+    struct ToolBadgeSet {
+        summary : BadgeDescriptor
+        perTool : BadgeDescriptor[]
+    }
+
+    struct FullCompatibilityKit {
+        os          : OsBadgeSet
+        arch        : ArchBadgeSet
+        runtime     : RuntimeBadgeSet
+        tools       : ToolBadgeSet
+        allMarkdown : string[]
+    }
+
+    // -------------------------------------------------------------------------
+    // Static datasets (sanitized, explicit values)
+    // -------------------------------------------------------------------------
+
+    const OS_DATA : OsInfo[] = [
+        OsInfo{
+            id       = "linux",
+            label    = "linux",
+            colorHex = "#2ebc4f",
+            logoSlug = "linux",
+            aliases  = ["ubuntu", "debian", "fedora", "arch"]
+        },
+        OsInfo{
+            id       = "macos",
+            label    = "macOS",
+            colorHex = "#000000",
+            logoSlug = "apple",
+            aliases  = ["darwin"]
+        },
+        OsInfo{
+            id       = "windows",
+            label    = "windows",
+            colorHex = "#0078D6",
+            logoSlug = "windows",
+            aliases  = ["win32"]
+        },
+        OsInfo{
+            id       = "freebsd",
+            label    = "FreeBSD",
+            colorHex = "#AB2B28",
+            logoSlug = "freebsd",
+            aliases  = []
+        },
+        OsInfo{
+            id       = "openbsd",
+            label    = "OpenBSD",
+            colorHex = "#F2CA30",
+            logoSlug = "openbsd",
+            aliases  = []
+        },
+        OsInfo{
+            id       = "android",
+            label    = "Android",
+            colorHex = "#3DDC84",
+            logoSlug = "android",
+            aliases  = []
+        }
+    ]
+
+    const ARCH_DATA : ArchInfo[] = [
+        ArchInfo{
+            id       = "x86_64",
+            label    = "x86_64",
+            colorHex = "#0969da",
+            logoSlug = "intel",
+            aliases  = ["amd64"]
+        },
+        ArchInfo{
+            id       = "arm64",
+            label    = "arm64",
+            colorHex = "#00d084",
+            logoSlug = "arm",
+            aliases  = []
+        },
+        ArchInfo{
+            id       = "armv7",
+            label    = "armv7",
+            colorHex = "#54aeff",
+            logoSlug = "raspberry-pi",
+            aliases  = []
+        },
+        ArchInfo{
+            id       = "riscv64",
+            label    = "risc-v",
+            colorHex = "#f78166",
+            logoSlug = "risc-v",
+            aliases  = []
+        }
+    ]
+
+    const RUNTIME_DATA : RuntimeInfo[] = [
+        RuntimeInfo{
+            id       = "node",
+            label    = "Node.js",
+            colorHex = "#43853d",
+            logoSlug = "node.js",
+            ranges   = ["^18", "^20", "^22"]
+        },
+        RuntimeInfo{
+            id       = "deno",
+            label    = "Deno",
+            colorHex = "#000000",
+            logoSlug = "deno",
+            ranges   = [">=1.42"]
+        },
+        RuntimeInfo{
+            id       = "bun",
+            label    = "Bun",
+            colorHex = "#fbf0df",
+            logoSlug = "bun",
+            ranges   = [">=1.0"]
+        },
+        RuntimeInfo{
+            id       = "browser",
+            label    = "browser",
+            colorHex = "#facc15",
+            logoSlug = "googlechrome",
+            ranges   = ["modern evergreen"]
+        },
+        RuntimeInfo{
+            id       = "docker",
+            label    = "Docker",
+            colorHex = "#0db7ed",
+            logoSlug = "docker",
+            ranges   = ["linux/amd64", "linux/arm64"]
+        }
+    ]
+
+    const TOOL_DATA : ToolInfo[] = [
+        ToolInfo{
+            id       = "npm",
+            label    = "npm",
+            colorHex = "#CB3837",
+            logoSlug = "npm"
+        },
+        ToolInfo{
+            id       = "pnpm",
+            label    = "pnpm",
+            colorHex = "#F69220",
+            logoSlug = "pnpm"
+        },
+        ToolInfo{
+            id       = "yarn",
+            label    = "yarn",
+            colorHex = "#2C8EBB",
+            logoSlug = "yarn"
+        },
+        ToolInfo{
+            id       = "pip",
+            label    = "pip",
+            colorHex = "#3776AB",
+            logoSlug = "pypi"
+        },
+        ToolInfo{
+            id       = "cargo",
+            label    = "cargo",
+            colorHex = "#000000",
+            logoSlug = "rust"
+        }
+    ]
+
+    // -------------------------------------------------------------------------
+    // URL-safe helpers
+    // -------------------------------------------------------------------------
+
+    fn stripHash(colorHex : string) -> string {
+        if startsWith(colorHex, "#") {
+            return substring(colorHex, 1, length(colorHex) - 1)
+        }
+        return colorHex
+    }
+
+    fn encodeSegment(raw : string) -> string {
+        // Minimal, safe encoder for Shields segments; real impl should use RFC3986 encoder
+        let replaced = replaceAll(raw, " ", "%20")
+        return replaceAll(replaced, "|", "%7C")
+    }
+
+    // -------------------------------------------------------------------------
+    // Core badge builder (Shields.io)
+    // -------------------------------------------------------------------------
+
+    fn makeBadge(
+        label   : string,
+        message : string,
+        color   : string,
+        style   : string,
+        logo    : string,
+        link    : string
+    ) -> BadgeDescriptor {
+
+        let safeColor = stripHash(color)
+        let encLabel  = encodeSegment(label)
+        let encMsg    = encodeSegment(message)
+        let encStyle  = encodeSegment(style)
+
+        let baseUrl   = "https://img.shields.io/badge/"
+        let logoPart  = if (length(logo) > 0) {
+            "&logo=" + encodeSegment(logo)
+        } else { "" }
+
+        let url = baseUrl + encLabel + "-" + encMsg + "-" + encodeSegment(safeColor) +
+                  "?style=" + encStyle + logoPart
+
+        let markdown = "[![" + label + "](" + url + ")](" + link + ")"
+
+        return BadgeDescriptor{
+            markdown = markdown,
+            url      = url,
+            meta     = BadgeMeta{
+                label   = label,
+                message = message,
+                color   = safeColor,
+                style   = style,
+                logo    = logo,
+                link    = link
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // OS compatibility
+    // -------------------------------------------------------------------------
+
+    fn osCompatibilityBadges(osIds : string[]) -> OsBadgeSet {
+        let supported : OsInfo[] = []
+        for os in OS_DATA {
+            if includes(osIds, os.id) {
+                push(supported, os)
+            }
+        }
+
+        let labelsJoined = if (length(supported) > 0) {
+            join(map(supported, (o) => o.label), " | ")
+        } else { "unknown" }
+
+        let primaryColor = if (length(supported) > 0) {
+            supported[0].colorHex
+        } else { "#6e7781" }
+
+        let summaryBadge = makeBadge(
+            "os",
+            labelsJoined,
+            primaryColor,
+            "for-the-badge",
+            "github",
+            "#os-compatibility"
+        )
+
+        let perOsBadges : BadgeDescriptor[] = []
+        for os in supported {
+            let b = makeBadge(
+                "os",
+                os.label,
+                os.colorHex,
+                "flat-square",
+                os.logoSlug,
+                "#os-compatibility"
+            )
+            push(perOsBadges, b)
+        }
+
+        return OsBadgeSet{
+            summary = summaryBadge,
+            perOs   = perOsBadges
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // CPU architecture compatibility
+    // -------------------------------------------------------------------------
+
+    fn archCompatibilityBadges(archIds : string[]) -> ArchBadgeSet {
+        let supported : ArchInfo[] = []
+        for a in ARCH_DATA {
+            if includes(archIds, a.id) {
+                push(supported, a)
+            }
+        }
+
+        let labelsJoined = if (length(supported) > 0) {
+            join(map(supported, (a) => a.label), " | ")
+        } else { "generic" }
+
+        let primaryColor = if (length(supported) > 0) {
+            supported[0].colorHex
+        } else { "#6e7781" }
+
+        let summary = makeBadge(
+            "arch",
+            labelsJoined,
+            primaryColor,
+            "for-the-badge",
+            "processor",
+            "#architecture-compatibility"
+        )
+
+        let perArch : BadgeDescriptor[] = []
+        for a in supported {
+            let b = makeBadge(
+                "arch",
+                a.label,
+                a.colorHex,
+                "flat",
+                a.logoSlug,
+                "#architecture-compatibility"
+            )
+            push(perArch, b)
+        }
+
+        return ArchBadgeSet{
+            summary = summary,
+            perArch = perArch
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Runtime compatibility
+    // -------------------------------------------------------------------------
+
+    fn runtimeCompatibilityBadges(runtimeIds : string[]) -> RuntimeBadgeSet {
+        let supported : RuntimeInfo[] = []
+        for rt in RUNTIME_DATA {
+            if includes(runtimeIds, rt.id) {
+                push(supported, rt)
+            }
+        }
+
+        let perRuntime : BadgeDescriptor[] = []
+        for rt in supported {
+            let rangeMsg = join(rt.ranges, ", ")
+            let b = makeBadge(
+                rt.label,
+                rangeMsg,
+                rt.colorHex,
+                "for-the-badge",
+                rt.logoSlug,
+                "#runtime-compatibility"
+            )
+            push(perRuntime, b)
+        }
+
+        let summaryMsg = if (length(supported) > 0) {
+            let parts : string[] = []
+            for rt in supported {
+                let segment = rt.label + " " + join(rt.ranges, "/")
+                push(parts, segment)
+            }
+            join(parts, " | ")
+        } else { "none" }
+
+        let summaryColor = if (length(supported) > 0) {
+            supported[0].colorHex
+        } else { "#6e7781" }
+
+        let summary = makeBadge(
+            "runtime",
+            summaryMsg,
+            summaryColor,
+            "flat-square",
+            "github",
+            "#runtime-compatibility"
+        )
+
+        return RuntimeBadgeSet{
+            summary    = summary,
+            perRuntime = perRuntime
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Tool / package manager compatibility
+    // -------------------------------------------------------------------------
+
+    fn toolCompatibilityBadges(toolIds : string[]) -> ToolBadgeSet {
+        let supported : ToolInfo[] = []
+        for t in TOOL_DATA {
+            if includes(toolIds, t.id) {
+                push(supported, t)
+            }
+        }
+
+        let summaryMsg = if (length(supported) > 0) {
+            join(map(supported, (t) => t.label), " | ")
+        } else { "generic" }
+
+        let summaryColor = if (length(supported) > 0) {
+            supported[0].colorHex
+        } else { "#6e7781" }
+
+        let summary = makeBadge(
+            "tools",
+            summaryMsg,
+            summaryColor,
+            "for-the-badge",
+            "github",
+            "#tooling-compatibility"
+        )
+
+        let perTool : BadgeDescriptor[] = []
+        for t in supported {
+            let b = makeBadge(
+                "tool",
+                t.label,
+                t.colorHex,
+                "flat",
+                t.logoSlug,
+                "#tooling-compatibility"
+            )
+            push(perTool, b)
+        }
+
+        return ToolBadgeSet{
+            summary = summary,
+            perTool = perTool
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Composite compatibility badge set
+    // -------------------------------------------------------------------------
+
+    fn fullCompatibilityKit(
+        osIds      : string[] = ["linux", "macos", "windows"],
+        archIds    : string[] = ["x86_64", "arm64"],
+        runtimeIds : string[] = ["node", "docker"],
+        toolIds    : string[] = ["npm", "pnpm", "yarn"]
+    ) -> FullCompatibilityKit {
+
+        let osSet      = osCompatibilityBadges(osIds)
+        let archSet    = archCompatibilityBadges(archIds)
+        let runtimeSet = runtimeCompatibilityBadges(runtimeIds)
+        let toolSet    = toolCompatibilityBadges(toolIds)
+
+        let allMd : string[] = []
+        push(allMd, osSet.summary.markdown)
+        for b in osSet.perOs { push(allMd, b.markdown) }
+
+        push(allMd, archSet.summary.markdown)
+        for b in archSet.perArch { push(allMd, b.markdown) }
+
+        push(allMd, runtimeSet.summary.markdown)
+        for b in runtimeSet.perRuntime { push(allMd, b.markdown) }
+
+        push(allMd, toolSet.summary.markdown)
+        for b in toolSet.perTool { push(allMd, b.markdown) }
+
+        return FullCompatibilityKit{
+            os          = osSet,
+            arch        = archSet,
+            runtime     = runtimeSet,
+            tools       = toolSet,
+            allMarkdown = allMd
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Deterministic PRNG (Mulberry32) in ALN-safe form
+    // -------------------------------------------------------------------------
+
+    fn mulberry32(seed : uint32) -> (fn() -> float64) {
+        let state : uint32 = seed
+
+        fn next() -> float64 {
+            state = state + 0x6d2b79f5
+            state = state ^ (state >> 15)
+            state = state * (1 | state)
+            state = state ^ (state >> 7)
+            state = state + (state * (61 | state))
+            state = state ^ (state >> 14)
+            let v : uint32 = state
+            return float64(v) / 4294967296.0
+        }
+
+        return next
+    }
+
+    // -------------------------------------------------------------------------
+    // Random compatibility badge (useful for demo dashboards)
+    // -------------------------------------------------------------------------
+
+    fn randomCompatibilityBadge(seedInput : int64 = -1) -> BadgeDescriptor {
+        let seed : uint32 = if (seedInput >= 0) {
+            uint32(seedInput)
+        } else {
+            // deterministic fallback for ALN runtime, use a fixed seed for now
+            0x1234abcd
+        }
+
+        let rng = mulberry32(seed)
+
+        let osIdx   = int32( floor( rng() * float64(length(OS_DATA)) ) )
+        let archIdx = int32( floor( rng() * float64(length(ARCH_DATA)) ) )
+        let rtIdx   = int32( floor( rng() * float64(length(RUNTIME_DATA)) ) )
+
+        let os   = OS_DATA[osIdx]
+        let arch = ARCH_DATA[archIdx]
+        let rt   = RUNTIME_DATA[rtIdx]
+
+        let msg = os.label + " · " + arch.label + " · " + rt.label
+
+        let badge = makeBadge(
+            "compat",
+            msg,
+            os.colorHex,
+            "for-the-badge",
+            rt.logoSlug,
+            "#system-compatibility"
+        )
+
+        return badge
+    }
+
+    // -------------------------------------------------------------------------
+    // Neuromorphic / BCI device routing hint (non-fictive, generic target)
+    // -------------------------------------------------------------------------
+
+    struct BciDeviceRoute {
+        deviceName     : string
+        firmwareBus    : string
+        shieldEndpoint : string
+        uiTarget       : string
+    }
+
+    // Example route for an AU HUD in Unreal/Unity/Godot via HTTP texture
+    const DEFAULT_BCI_ROUTE : BciDeviceRoute = BciDeviceRoute{
+        deviceName     = "AUP-NeuroLink-Bridge-01",
+        firmwareBus    = "spi0.0:neuromorphic-mesh",
+        shieldEndpoint = "http://localhost:7788/system-compat-badges",
+        uiTarget       = "HUD/Overlays/SystemCompatibilityPanel"
+    }
+}
