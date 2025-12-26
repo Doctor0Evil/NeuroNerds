@@ -1,0 +1,395 @@
+// ColorTokenMapper.aln
+// ALN port of ColorTokenMapper.js to classify GitHub-style `colors` theme objects
+// into semantic families, component systems, code/diff systems, and ANSI sets. [file:1]
+
+module ColorTokenMapper {
+
+    // -------------------------------------------------------------------------
+    // Core structs
+    // -------------------------------------------------------------------------
+
+    struct CssVarToken {
+        raw      : string
+        cssVar   : string
+        fallback : string
+    }
+
+    struct SemanticFamily {
+        key    : string
+        kind   : string
+        tokens : map<string,CssVarToken>
+    }
+
+    struct ComponentSystem {
+        key    : string
+        tokens : map<string,CssVarToken>
+    }
+
+    struct CodeDiffSystem {
+        key    : string
+        tokens : map<string,CssVarToken>
+    }
+
+    struct AnsiSet {
+        key    : string
+        tokens : map<string,CssVarToken>
+    }
+
+    struct ColorSummary {
+        totalTopLevelKeys      : int32
+        semanticFamilyCount    : int32
+        componentSystemCount   : int32
+        codeAndDiffSystemCount : int32
+        ansiSetCount           : int32
+        notes                  : string[]
+    }
+
+    struct ColorReport {
+        sourceKind          : string
+        semanticFamilies    : map<string,SemanticFamily>
+        componentSystems    : map<string,ComponentSystem>
+        codeAndDiffSystems  : map<string,CodeDiffSystem>
+        ansiColorSets       : map<string,AnsiSet>
+        summary             : ColorSummary
+    }
+
+    // -------------------------------------------------------------------------
+    // Public entry
+    // -------------------------------------------------------------------------
+
+    fn mapColors(colorsRoot : any) -> ColorReport {
+        let root : any = if isNil(colorsRoot) then {} else colorsRoot
+
+        let semanticFamilies   = buildSemanticFamilies(root)
+        let componentSystems   = buildComponentSystems(root)
+        let codeDiffSystems    = buildCodeAndDiffSystems(root)
+        let ansiSets           = buildAnsiColorSets(root)
+        let summary            = buildSummary(root, semanticFamilies, componentSystems, codeDiffSystems, ansiSets)
+
+        return ColorReport{
+            sourceKind         = "theme-colors-object",
+            semanticFamilies   = semanticFamilies,
+            componentSystems   = componentSystems,
+            codeAndDiffSystems = codeDiffSystems,
+            ansiColorSets      = ansiSets,
+            summary            = summary
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Semantic families (accent, danger, open, closed, neutral, etc.)
+    // -------------------------------------------------------------------------
+
+    fn buildSemanticFamilies(root : any) -> map<string,SemanticFamily> {
+        let familyKeys : string[] = [
+            "accent",
+            "attention",
+            "danger",
+            "open",
+            "closed",
+            "neutral",
+            "done",
+            "fg",
+            "canvas",
+            "overlay",
+            "pageHeaderBg"
+        ]
+
+        let families : map<string,SemanticFamily> = {}
+
+        for key in familyKeys {
+            if !hasField(root, key) {
+                continue
+            }
+            let value = root[key]
+            if isNil(value) {
+                continue
+            }
+
+            if key == "pageHeaderBg" {
+                let tokens : map<string,CssVarToken> = {}
+                tokens["pageHeaderBg"] = parseCssVar(value)
+                families[key] = SemanticFamily{
+                    key    = key,
+                    kind   = "single",
+                    tokens = tokens
+                }
+            } else if typeof(value) == "object" {
+                let tokens = flattenTokenGroup(value, key)
+                families[key] = SemanticFamily{
+                    key    = key,
+                    kind   = "group",
+                    tokens = tokens
+                }
+            }
+        }
+
+        return families
+    }
+
+    // -------------------------------------------------------------------------
+    // Component color systems (btn, header, input, etc.)
+    // -------------------------------------------------------------------------
+
+    fn buildComponentSystems(root : any) -> map<string,ComponentSystem> {
+        let systems : map<string,ComponentSystem> = {}
+
+        let componentKeys : string[] = [
+            "btn",
+            "header",
+            "headerSearch",
+            "menu",
+            "avatar",
+            "actionListItem",
+            "input",
+            "counter",
+            "control",
+            "marketingIcon",
+            "mktg",
+            "canvas",
+            "fg"
+        ]
+
+        for key in componentKeys {
+            if !hasField(root, key) {
+                continue
+            }
+            let v = root[key]
+            if isNil(v) || typeof(v) != "object" {
+                continue
+            }
+            let tokens = flattenTokenGroup(v, key)
+            systems[key] = ComponentSystem{
+                key    = key,
+                tokens = tokens
+            }
+        }
+
+        return systems
+    }
+
+    // -------------------------------------------------------------------------
+    // Code, diff, and checks color systems
+    // -------------------------------------------------------------------------
+
+    fn buildCodeAndDiffSystems(root : any) -> map<string,CodeDiffSystem> {
+        let systems : map<string,CodeDiffSystem> = {}
+
+        if hasField(root, "prettylights") && typeof(root["prettylights"]) == "object" {
+            let pl = root["prettylights"]
+            if hasField(pl, "syntax") && typeof(pl["syntax"]) == "object" {
+                let tokens = flattenTokenGroup(pl["syntax"], "prettylights.syntax")
+                systems["prettylightsSyntax"] = CodeDiffSystem{
+                    key    = "prettylights.syntax",
+                    tokens = tokens
+                }
+            }
+        }
+
+        if hasField(root, "codemirror") && typeof(root["codemirror"]) == "object" {
+            let cm = root["codemirror"]
+            let baseTokens = flattenTokenGroup(cm, "codemirror")
+            systems["codemirror"] = CodeDiffSystem{
+                key    = "codemirror",
+                tokens = baseTokens
+            }
+
+            if hasField(cm, "syntax") && typeof(cm["syntax"]) == "object" {
+                let st = flattenTokenGroup(cm["syntax"], "codemirror.syntax")
+                systems["codemirrorSyntax"] = CodeDiffSystem{
+                    key    = "codemirror.syntax",
+                    tokens = st
+                }
+            }
+        }
+
+        if hasField(root, "diffBlob") && typeof(root["diffBlob"]) == "object" {
+            systems["diffBlob"] = CodeDiffSystem{
+                key    = "diffBlob",
+                tokens = flattenTokenGroup(root["diffBlob"], "diffBlob")
+            }
+        }
+
+        if hasField(root, "diffstat") && typeof(root["diffstat"]) == "object" {
+            systems["diffstat"] = CodeDiffSystem{
+                key    = "diffstat",
+                tokens = flattenTokenGroup(root["diffstat"], "diffstat")
+            }
+        }
+
+        if hasField(root, "checks") && typeof(root["checks"]) == "object" {
+            systems["checks"] = CodeDiffSystem{
+                key    = "checks",
+                tokens = flattenTokenGroup(root["checks"], "checks")
+            }
+        }
+
+        return systems
+    }
+
+    // -------------------------------------------------------------------------
+    // ANSI color sets (ansi, checks.ansi)
+    // -------------------------------------------------------------------------
+
+    fn buildAnsiColorSets(root : any) -> map<string,AnsiSet> {
+        let sets : map<string,AnsiSet> = {}
+
+        if hasField(root, "ansi") && typeof(root["ansi"]) == "object" {
+            sets["ansi"] = AnsiSet{
+                key    = "ansi",
+                tokens = flattenTokenGroup(root["ansi"], "ansi")
+            }
+        }
+
+        if hasField(root, "checks") && typeof(root["checks"]) == "object" {
+            let ch = root["checks"]
+            if hasField(ch, "ansi") && typeof(ch["ansi"]) == "object" {
+                sets["checksAnsi"] = AnsiSet{
+                    key    = "checks.ansi",
+                    tokens = flattenTokenGroup(ch["ansi"], "checks.ansi")
+                }
+            }
+        }
+
+        return sets
+    }
+
+    // -------------------------------------------------------------------------
+    // Flattening and parsing helpers
+    // -------------------------------------------------------------------------
+
+    fn flattenTokenGroup(obj : any, prefix : string) -> map<string,CssVarToken> {
+        let out : map<string,CssVarToken> = {}
+
+        fn walk(node : any, pathPrefix : string) {
+            if isNil(node) || typeof(node) != "object" {
+                return
+            }
+            for k, v in fields(node) {
+                let fullPath = if length(pathPrefix) > 0 then pathPrefix + "." + k else k
+                if typeof(v) == "object" && !looksLikeCssVarString(v) {
+                    walk(v, fullPath)
+                } else {
+                    out[fullPath] = parseCssVar(v)
+                }
+            }
+        }
+
+        walk(obj, prefix)
+        return out
+    }
+
+    fn looksLikeCssVarString(value : any) -> bool {
+        if typeof(value) != "string" {
+            return false
+        }
+        let trimmed = trim(value)
+        return startsWith(trimmed, "var(")
+    }
+
+    fn parseCssVar(value : any) -> CssVarToken {
+        if typeof(value) != "string" {
+            return CssVarToken{
+                raw      = toString(value),
+                cssVar   = null,
+                fallback = null
+            }
+        }
+
+        let trimmed = trim(value)
+        if !startsWith(trimmed, "var(") {
+            return CssVarToken{
+                raw      = trimmed,
+                cssVar   = null,
+                fallback = null
+            }
+        }
+
+        // Strip leading var( and trailing )
+        let inner = substring(trimmed, 4, length(trimmed) - 5)
+        let parts = splitTopLevelComma(inner)
+        let varName : string = null
+        let fallback : string = null
+
+        if length(parts) > 0 {
+            varName = trim(parts[0])
+        }
+        if length(parts) > 1 {
+            // Everything after first comma is considered fallback (can itself be nested var()).
+            let rest : string = ""
+            for i in range(1, length(parts)) {
+                if i > 1 {
+                    rest = rest + ","
+                }
+                rest = rest + parts[i]
+            }
+            fallback = trim(rest)
+        }
+
+        return CssVarToken{
+            raw      = trimmed,
+            cssVar   = varName,
+            fallback = fallback
+        }
+    }
+
+    fn splitTopLevelComma(str : string) -> string[] {
+        let result : string[] = []
+        let depth : int32 = 0
+        let current : string = ""
+
+        for i in range(0, length(str)) {
+            let ch = charAt(str, i)
+            if ch == "(" {
+                depth = depth + 1
+                current = current + ch
+            } else if ch == ")" {
+                if depth > 0 {
+                    depth = depth - 1
+                }
+                current = current + ch
+            } else if ch == "," && depth == 0 {
+                push(result, current)
+                current = ""
+            } else {
+                current = current + ch
+            }
+        }
+
+        if length(current) > 0 {
+            push(result, current)
+        }
+        return result
+    }
+
+    // -------------------------------------------------------------------------
+    // Summary
+    // -------------------------------------------------------------------------
+
+    fn buildSummary(
+        root            : any,
+        families        : map<string,SemanticFamily>,
+        systems         : map<string,ComponentSystem>,
+        codeSystems     : map<string,CodeDiffSystem>,
+        ansiSets        : map<string,AnsiSet>
+    ) -> ColorSummary {
+
+        let totalTopLevelKeys : int32 = if typeof(root) == "object" then length(fields(root)) else 0
+
+        let notes : string[] = [
+            "ColorSemanticFamilies let engines reason in success/warning/error/neutral space without hex coupling.",
+            "ComponentColorSystems encode button/header/input contracts for generators and tests.",
+            "CodeAndDiffColorSystems keep editors, diffs, and CI checks visually aligned.",
+            "AnsiColorSets map logical ANSI colors (e.g., redBright) to theme-aware CSS variables."
+        ]
+
+        return ColorSummary{
+            totalTopLevelKeys      = totalTopLevelKeys,
+            semanticFamilyCount    = length(families),
+            componentSystemCount   = length(systems),
+            codeAndDiffSystemCount = length(codeSystems),
+            ansiSetCount           = length(ansiSets),
+            notes                  = notes
+        }
+    }
+}
