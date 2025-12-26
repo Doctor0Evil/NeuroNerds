@@ -1,0 +1,347 @@
+// ThemeTokenMapper.aln
+// ALN port of ThemeTokenMapper.js to normalize memoizedState theme bundles
+// (spacing, typography, colors, shadows, schemes) into structured virtual-objects. [file:1][web:1]
+
+module ThemeTokenMapper {
+
+    // -------------------------------------------------------------------------
+    // Core structs
+    // -------------------------------------------------------------------------
+
+    struct ScaleInfo {
+        name       : string
+        kind       : string
+        length     : int32
+        values     : any[]
+        fullValues : any[]
+        notes      : string
+    }
+
+    struct NamedMapEntry {
+        key   : string
+        value : any
+    }
+
+    struct NamedMapInfo {
+        name        : string
+        kind        : string
+        size        : int32
+        entries     : NamedMapEntry[]
+        fullEntries : NamedMapEntry[]
+        notes       : string
+    }
+
+    struct ColorSchemePreview {
+        name    : string
+        keys    : string[]
+        preview : NamedMapEntry[]
+    }
+
+    struct ColorSchemeSet {
+        raw    : any
+        schemes: ColorSchemePreview[]
+        summary: any
+    }
+
+    struct FlattenedToken {
+        path  : string
+        value : any
+    }
+
+    struct ThemeSummary {
+        hasSpaceScale      : bool
+        hasBreakpointScale : bool
+        colorSchemeCount   : int32
+        colorCount         : int32
+        shadowCount        : int32
+        notes              : string[]
+    }
+
+    struct ThemeScales {
+        space       : ScaleInfo
+        radii       : ScaleInfo
+        fontSizes   : ScaleInfo
+        breakpoints : ScaleInfo
+        sizes       : NamedMapInfo
+    }
+
+    struct ThemeTypography {
+        fontWeights : NamedMapInfo
+        fonts       : NamedMapInfo
+        lineHeights : NamedMapInfo
+    }
+
+    struct ThemeTokenReport {
+        sourceKind    : string
+        scales        : ThemeScales
+        typography    : ThemeTypography
+        colorSchemes  : ColorSchemeSet
+        colors        : FlattenedToken[]
+        shadows       : FlattenedToken[]
+        animations    : NamedMapInfo
+        summary       : ThemeSummary
+    }
+
+    const maxPreview : int32 = 16
+
+    // -------------------------------------------------------------------------
+    // Public entry
+    // -------------------------------------------------------------------------
+
+    fn mapTheme(memoizedState : any) -> ThemeTokenReport {
+        let root = extractThemeRoot(memoizedState)
+
+        let scales = ThemeScales{
+            space       = buildScale("space", root["space"]),
+            radii       = buildScale("radii", root["radii"]),
+            fontSizes   = buildScale("fontSizes", root["fontSizes"]),
+            breakpoints = buildScale("breakpoints", root["breakpoints"]),
+            sizes       = buildNamedMap("sizes", root["sizes"])
+        }
+
+        let typography = ThemeTypography{
+            fontWeights = buildNamedMap("fontWeights", root["fontWeights"]),
+            fonts       = buildNamedMap("fonts", root["fonts"]),
+            lineHeights = buildNamedMap("lineHeights", root["lineHeights"])
+        }
+
+        let schemes    = buildColorSchemes(root["colorSchemes"])
+        let colors     = flattenTokens(root["colors"])
+        let shadows    = flattenTokens(root["shadows"])
+        let animations = buildNamedMap("animation", root["animation"])
+        let summary    = buildSummary(scales, schemes, colors, shadows)
+
+        return ThemeTokenReport{
+            sourceKind   = "memoized-theme-state",
+            scales       = scales,
+            typography   = typography,
+            colorSchemes = schemes,
+            colors       = colors,
+            shadows      = shadows,
+            animations   = animations,
+            summary      = summary
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Root extraction from memoizedState (React-style)
+    // -------------------------------------------------------------------------
+
+    fn extractThemeRoot(memoizedState : any) -> any {
+        if isArray(memoizedState) && length(memoizedState) > 0 {
+            let cand0 = memoizedState[0]
+            if typeof(cand0) == "object" && !isNil(cand0) {
+                return cand0
+            }
+            if length(memoizedState) > 1 {
+                let cand1 = memoizedState[1]
+                if typeof(cand1) == "object" && !isNil(cand1) {
+                    return cand1
+                }
+            }
+        }
+
+        if typeof(memoizedState) == "object" && !isNil(memoizedState) {
+            return memoizedState
+        }
+
+        return {}
+    }
+
+    // -------------------------------------------------------------------------
+    // Scale / map builders
+    // -------------------------------------------------------------------------
+
+    fn buildScale(name : string, arr : any) -> ScaleInfo {
+        if !isArray(arr) {
+            return ScaleInfo{
+                name       = name,
+                kind       = "scale",
+                length     = 0,
+                values     = [],
+                fullValues = [],
+                notes      = "Not an array; scale unavailable."
+            }
+        }
+
+        let l = length(arr)
+        let preview : any[] = []
+        let limit = if l < maxPreview then l else maxPreview
+        for i in range(0, limit) {
+            push(preview, arr[i])
+        }
+
+        return ScaleInfo{
+            name       = name,
+            kind       = "scale",
+            length     = l,
+            values     = preview,
+            fullValues = arr,
+            notes      = ""
+        }
+    }
+
+    fn buildNamedMap(name : string, obj : any) -> NamedMapInfo {
+        if typeof(obj) != "object" || isNil(obj) {
+            return NamedMapInfo{
+                name        = name,
+                kind        = "map",
+                size        = 0,
+                entries     = [],
+                fullEntries = [],
+                notes       = "Not an object; map unavailable."
+            }
+        }
+
+        let all : NamedMapEntry[] = []
+        for k, v in fields(obj) {
+            push(all, NamedMapEntry{ key = k, value = v })
+        }
+
+        let preview : NamedMapEntry[] = []
+        let l = length(all)
+        let limit = if l < maxPreview then l else maxPreview
+        for i in range(0, limit) {
+            push(preview, all[i])
+        }
+
+        return NamedMapInfo{
+            name        = name,
+            kind        = "map",
+            size        = l,
+            entries     = preview,
+            fullEntries = all,
+            notes       = ""
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Color schemes (light/dark/etc.)
+    // -------------------------------------------------------------------------
+
+    fn buildColorSchemes(colorSchemes : any) -> ColorSchemeSet {
+        if typeof(colorSchemes) != "object" || isNil(colorSchemes) {
+            return ColorSchemeSet{
+                raw     = {},
+                schemes = [],
+                summary = {
+                    "count"       : 0,
+                    "schemeNames" : [] as string[],
+                    "notes"       : "No colorSchemes object detected."
+                }
+            }
+        }
+
+        let names : string[] = []
+        for k, _ in fields(colorSchemes) {
+            push(names, k)
+        }
+
+        let previews : ColorSchemePreview[] = []
+        for nm in names {
+            let scheme = colorSchemes[nm]
+            if typeof(scheme) != "object" || isNil(scheme) {
+                continue
+            }
+            let keyList : string[] = []
+            for k2, _ in fields(scheme) {
+                push(keyList, k2)
+            }
+
+            let entries : NamedMapEntry[] = []
+            for k2, v2 in fields(scheme) {
+                push(entries, NamedMapEntry{ key = k2, value = v2 })
+            }
+
+            let previewEntries : NamedMapEntry[] = []
+            let l = length(entries)
+            let limit = if l < maxPreview then l else maxPreview
+            for i in range(0, limit) {
+                push(previewEntries, entries[i])
+            }
+
+            push(previews, ColorSchemePreview{
+                name    = nm,
+                keys    = keyList,
+                preview = previewEntries
+            })
+        }
+
+        let sample : ColorSchemePreview[] = []
+        let lps = length(previews)
+        let limitPs = if lps < maxPreview then lps else maxPreview
+        for i in range(0, limitPs) {
+            push(sample, previews[i])
+        }
+
+        let summary : any = {
+            "count"       : lps,
+            "schemeNames" : names,
+            "sample"      : sample
+        }
+
+        return ColorSchemeSet{
+            raw     = colorSchemes,
+            schemes = previews,
+            summary = summary
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Flatten colors / shadows into path-value pairs
+    // -------------------------------------------------------------------------
+
+    fn flattenTokens(root : any) -> FlattenedToken[] {
+        let out : FlattenedToken[] = []
+
+        fn walk(node : any, prefix : string) {
+            if typeof(node) != "object" || isNil(node) {
+                return
+            }
+            for k, v in fields(node) {
+                let path = if length(prefix) > 0 then prefix + "." + k else k
+                if typeof(v) == "object" && !isNil(v) {
+                    walk(v, path)
+                } else {
+                    push(out, FlattenedToken{ path = path, value = v })
+                }
+            }
+        }
+
+        walk(root, "")
+        return out
+    }
+
+    // -------------------------------------------------------------------------
+    // Summary
+    // -------------------------------------------------------------------------
+
+    fn buildSummary(
+        scales : ThemeScales,
+        schemes: ColorSchemeSet,
+        colors : FlattenedToken[],
+        shadows: FlattenedToken[]
+    ) -> ThemeSummary {
+
+        let hasSpace  = scales.space.length > 0
+        let hasBp     = scales.breakpoints.length > 0
+        let csCount   = int32(schemes.summary["count"])
+        let colorCnt  = length(colors)
+        let shadowCnt = length(shadows)
+
+        let notes : string[] = [
+            "space and breakpoints scales reconstruct responsive layout rhythms.",
+            "colorSchemes capture light/dark/high-contrast variants from the live theme tokens.",
+            "flattened colors and shadows can be joined to CSS custom properties for DOM mapping. [web:1]"
+        ]
+
+        return ThemeSummary{
+            hasSpaceScale      = hasSpace,
+            hasBreakpointScale = hasBp,
+            colorSchemeCount   = csCount,
+            colorCount         = colorCnt,
+            shadowCount        = shadowCnt,
+            notes              = notes
+        }
+    }
+}
